@@ -16,7 +16,7 @@
             display: flex;
             justify-content: space-around;
             align-items: center;
-            font-size: 0.8em; /* Slightly smaller for mobile footer */
+            font-size: 0.8em;
             text-transform: uppercase;
             flex-wrap: wrap;
         }
@@ -24,9 +24,25 @@
         #msg { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 2.5em; display: none; color: #fff; text-shadow: 0 0 20px #f00; z-index: 30; }
         #bossBarContainer { position: absolute; top: 30px; left: 50%; transform: translateX(-50%); width: 80%; height: 10px; background: #200; border: 2px solid #f00; display: none; border-radius: 5px; overflow: hidden; }
         #bossBar { width: 100%; height: 100%; background: linear-gradient(90deg, #f00, #ffaa00); transition: width 0.1s; }
+        
+        /* Audio Toggle Style */
+        #audioToggle {
+            position: absolute; top: 10px; right: 10px; z-index: 40;
+            width: 35px; height: 35px; background: rgba(0, 40, 0, 0.8);
+            border: 2px solid #0f0; border-radius: 50%; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            pointer-events: auto; opacity: 0.3; transition: 0.3s;
+        }
+        #audioToggle.active { opacity: 1; box-shadow: 0 0 10px #0f0; }
     </style>
 </head>
 <body>
+    <div id="audioToggle" onclick="toggleMute()">
+        <svg id="speakerIcon" width="20" height="20" viewBox="0 0 24 24" fill="#0f0">
+            <path id="speakerPath" d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.26 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
+        </svg>
+    </div>
+
     <div id="bossBarContainer"><div id="bossBar"></div></div>
     <div id="msg">MAYDAY!</div>
     <canvas id="gameCanvas"></canvas>
@@ -41,24 +57,56 @@
     </div>
 
 <script>
+// --- AUDIO SYSTEM ---
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+let soundEnabled = false;
+let isMuted = false;
+
+// 5-second initialization delay
+setTimeout(() => {
+    soundEnabled = true;
+    document.getElementById('audioToggle').classList.add('active');
+}, 5000);
+
+function toggleMute() {
+    if(!soundEnabled) return;
+    isMuted = !isMuted;
+    document.getElementById('audioToggle').style.borderColor = isMuted ? "#f00" : "#0f0";
+    document.getElementById('speakerIcon').style.fill = isMuted ? "#f00" : "#0f0";
+}
+
+function playSfx(freq, type, vol = 0.1) {
+    if (!soundEnabled || isMuted || audioCtx.state === 'suspended') return;
+    
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    osc.type = type; // 'square' for lasers, 'sawtooth' for booms
+    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+
+    gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.1);
+}
+
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 
-// --- NEW SCALING LOGIC ---
 let gameScale = 1;
 let hitScale = 1;
 
 function resize() {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
-    
-    // If Vertical (Mobile), shrink everything to 60% size
     if (canvas.height > canvas.width) {
-        gameScale = 0.6;
-        hitScale = 0.65;
+        gameScale = 0.6; hitScale = 0.65;
     } else {
-        gameScale = 1.0;
-        hitScale = 1.0;
+        gameScale = 1.0; hitScale = 1.0;
     }
 }
 window.addEventListener('resize', resize);
@@ -82,20 +130,15 @@ function drawFleet(x, y, color, scale, isEnemy, shape, isBoss = false) {
     ctx.save();
     ctx.translate(x, y);
     if (isEnemy) ctx.rotate(Math.PI);
-    
-    // Apply dynamic gameScale
     let finalScale = (isBoss ? scale * 2.8 : scale) * gameScale;
     ctx.scale(finalScale, finalScale);
-
     const dark = "#111";
     const hull = isBoss ? "#8B0000" : "#333";
-
     const drawPart = (path, fill) => {
         ctx.fillStyle = fill;
         ctx.beginPath(); path(); ctx.closePath(); ctx.fill();
         ctx.strokeStyle = "rgba(255,255,255,0.3)"; ctx.lineWidth = 1; ctx.stroke();
     };
-
     if (shape === 'player' || isBoss) {
         drawPart(() => { ctx.moveTo(-50, 15); ctx.lineTo(0, -15); ctx.lineTo(50, 15); ctx.lineTo(15, 35); ctx.lineTo(-15, 35); }, color);
         drawPart(() => { ctx.moveTo(0, -50); ctx.lineTo(-12, 25); ctx.lineTo(12, 25); }, hull);
@@ -116,7 +159,6 @@ function drawFleet(x, y, color, scale, isEnemy, shape, isBoss = false) {
         drawPart(() => { ctx.moveTo(0, -40); ctx.lineTo(-55, 0); ctx.lineTo(0, 40); ctx.lineTo(55, 0); }, color);
         drawPart(() => { ctx.moveTo(0, -25); ctx.lineTo(-10, 10); ctx.lineTo(10, 10); }, dark);
     }
-
     ctx.fillStyle = "rgba(0, 255, 255, 0.9)";
     ctx.beginPath(); ctx.ellipse(0, -15, 5, 12, 0, 0, 7); ctx.fill();
     ctx.restore();
@@ -125,6 +167,7 @@ function drawFleet(x, y, color, scale, isEnemy, shape, isBoss = false) {
 function triggerUltimate() {
     if (game.ults <= 0 || game.ultActive) return false;
     game.ults--; game.ultActive = true; updateUI();
+    playSfx(150, 'sawtooth', 0.3); // Heavy sound for Ult
     eBullets = [];
     enemies = enemies.filter(en => en.isBoss);
     setTimeout(() => { game.ultActive = false; }, 1000);
@@ -155,6 +198,7 @@ function update() {
         drawFleet(player.x, player.y, '#0f0', 1, false, 'player');
         player.shootTimer++;
         if (player.shootTimer > 8) {
+            playSfx(600, 'square', 0.05); // Laser sound
             let spacing = 15 * gameScale;
             let start = player.x - (player.mainGunProj - 1) * spacing;
             for(let i=0; i<player.mainGunProj; i++) pBullets.push({x: start+(i*spacing*2), y: player.y - (50 * gameScale), vx: 0, vy: -22, color: '#fff', size: 5 * gameScale});
@@ -176,14 +220,15 @@ function update() {
         
         en.shootTimer++;
         if (en.shootTimer > (en.isBoss ? 30 : 75)) {
+            playSfx(200, 'square', 0.03); // Enemy shoot sound
             if (en.isBoss) en.weapons.forEach(w => fire(en.x, en.y, w, false));
             else fire(en.x, en.y, en.typeKey, false);
             en.shootTimer = 0;
         }
         
-        // Scaled Hitbox
         let hitLimit = (en.isBoss ? 150 : 65) * hitScale;
         if (player.active && Math.hypot(en.x - player.x, en.y - player.y) < hitLimit) { 
+            playSfx(100, 'sawtooth', 0.2); // Impact sound
             if(player.shields > 0) { player.shields--; enemies.splice(i, 1); updateUI(); }
             else if (!triggerUltimate()) { killPlayer(); if(!en.isBoss) enemies.splice(i, 1); }
         }
@@ -214,6 +259,7 @@ function update() {
                     if (Math.hypot(b.x - en.x, b.y - en.y) < hitLimit) {
                         en.hp--; arr.splice(i, 1);
                         if (en.hp <= 0) {
+                            playSfx(300, 'sawtooth', 0.1); // Enemy Kill sound
                             game.score++; 
                             if(game.score % 20 === 0) {
                                 if(player.shields < 3) player.shields++;
@@ -232,6 +278,7 @@ function update() {
                 });
             } else {
                 if (player.active && Math.hypot(b.x - player.x, b.y - player.y) < 40 * hitScale) { 
+                    playSfx(50, 'sawtooth', 0.2); // Player Hit sound
                     if(player.shields > 0) { player.shields--; arr.splice(i, 1); updateUI(); }
                     else if (!triggerUltimate()) { killPlayer(); arr.splice(i, 1); }
                 }
@@ -248,6 +295,7 @@ function update() {
         ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill();
         ctx.globalAlpha = 0.6; drawFleet(p.x, p.y, "white", 0.35, false, ENEMY_DEFS[p.type].shape); ctx.restore();
         if (player.active && Math.hypot(p.x-player.x, p.y-player.y) < 65 * hitScale) {
+            playSfx(800, 'square', 0.1); // Powerup sound
             if (player.stolenWeapons.length >= 3) player.stolenWeapons.shift();
             player.stolenWeapons.push(p.type); powerUps.splice(i, 1); updateUI();
         }
@@ -266,6 +314,7 @@ function fire(x, y, typeKey, isPlayer) {
 }
 
 function moveInput(e) {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
     if (!player.active) return;
     const rect = canvas.getBoundingClientRect();
     player.x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
