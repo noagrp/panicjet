@@ -342,8 +342,16 @@ function spawnBoss(tier) {
 
 function killPlayer() {
     if (!player.active) return;
-    player.active = false; game.lives--; player.shields = 0;
-    updateUI(); document.getElementById('msg').style.display = 'block';
+    player.active = false; 
+    game.lives--; 
+    player.shields = 0;
+    
+    // Penalty: Reduce projectiles (min 2) and remove one stolen weapon
+    if (player.mainGunProj > 2) player.mainGunProj--;
+    if (player.stolenWeapons.length > 0) player.stolenWeapons.pop();
+
+    updateUI(); 
+    document.getElementById('msg').style.display = 'block';
     if (game.lives <= 0) { alert("MISSION OVER."); location.reload(); }
     else { setTimeout(() => { player.active = true; document.getElementById('msg').style.display = 'none'; }, 2000); }
 }
