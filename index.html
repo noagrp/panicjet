@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Panic Jet</title>
+    <title>Panic Jet: Quadrant Strike</title>
     <style>
         body { margin: 0; background: #000; overflow: hidden; color: #0f0; font-family: 'Courier New', monospace; touch-action: none; }
         canvas { display: block; background: #010401; }
@@ -16,7 +16,7 @@
             display: flex;
             justify-content: space-around;
             align-items: center;
-            font-size: 0.8em; /* Slightly smaller for mobile footer */
+            font-size: 0.8em;
             text-transform: uppercase;
             flex-wrap: wrap;
         }
@@ -44,15 +44,12 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 
-// --- NEW SCALING LOGIC ---
 let gameScale = 1;
 let hitScale = 1;
 
 function resize() {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
-    
-    // If Vertical (Mobile), shrink everything to 60% size
     if (canvas.height > canvas.width) {
         gameScale = 0.6;
         hitScale = 0.65;
@@ -83,7 +80,6 @@ function drawFleet(x, y, color, scale, isEnemy, shape, isBoss = false) {
     ctx.translate(x, y);
     if (isEnemy) ctx.rotate(Math.PI);
     
-    // Apply dynamic gameScale
     let finalScale = (isBoss ? scale * 2.8 : scale) * gameScale;
     ctx.scale(finalScale, finalScale);
 
@@ -169,9 +165,18 @@ function update() {
             en.x += (player.x - en.x) * 0.035;
             document.getElementById('bossBar').style.width = (en.hp / en.maxHP * 100) + "%";
         } else {
-            en.x += (player.x - en.x) * 0.02; 
+            // General movement
+            en.x += en.vx;
             en.y += (en.def.speed * (1 + (game.level-1)*0.4)) * (canvas.height > canvas.width ? 0.8 : 1);
+            
+            // Subtle tracking for side spawners
+            if(en.spawnType === 'side') {
+                en.vx *= 0.98; // Friction to stop horizontal slide
+            } else {
+                en.x += (player.x - en.x) * 0.01; // Slower tracking for quadrant spawns
+            }
         }
+        
         drawFleet(en.x, en.y, en.def.color, 1.1, true, en.def.shape, en.isBoss);
         
         en.shootTimer++;
@@ -181,13 +186,12 @@ function update() {
             en.shootTimer = 0;
         }
         
-        // Scaled Hitbox
         let hitLimit = (en.isBoss ? 150 : 65) * hitScale;
         if (player.active && Math.hypot(en.x - player.x, en.y - player.y) < hitLimit) { 
             if(player.shields > 0) { player.shields--; enemies.splice(i, 1); updateUI(); }
             else if (!triggerUltimate()) { killPlayer(); if(!en.isBoss) enemies.splice(i, 1); }
         }
-        if (!en.isBoss && en.y > canvas.height + 200) enemies.splice(i, 1);
+        if (en.y > canvas.height + 200 || en.x < -200 || en.x > canvas.width + 200) enemies.splice(i, 1);
     });
 
     [pBullets, eBullets].forEach((arr, isP) => {
@@ -277,14 +281,51 @@ window.addEventListener('touchmove', (e) => { e.preventDefault(); moveInput(e); 
 function spawnEnemy() {
     const keys = Object.keys(ENEMY_DEFS);
     const tk = keys[Math.floor(Math.random() * keys.length)];
-    enemies.push({ x: Math.random()*(canvas.width-100)+50, y: -100, typeKey: tk, def: ENEMY_DEFS[tk], hp: 1, isBoss: false, shootTimer: 0 });
+    
+    // Four different ways of spawning
+    const mode = Math.floor(Math.random() * 4);
+    let x, y, vx = 0;
+    let spawnType = 'top';
+
+    switch(mode) {
+        case 0: // Top Left Corner
+            x = Math.random() * (canvas.width * 0.3);
+            y = -100;
+            break;
+        case 1: // Top Right Corner
+            x = canvas.width - (Math.random() * (canvas.width * 0.3));
+            y = -100;
+            break;
+        case 2: // Far Center Left (Middle side)
+            x = -100;
+            y = canvas.height * 0.3 + Math.random() * (canvas.height * 0.2);
+            vx = 2; // Slide into screen
+            spawnType = 'side';
+            break;
+        case 3: // Right Middle Side
+            x = canvas.width + 100;
+            y = canvas.height * 0.3 + Math.random() * (canvas.height * 0.2);
+            vx = -2; // Slide into screen
+            spawnType = 'side';
+            break;
+    }
+
+    enemies.push({ 
+        x, y, vx, 
+        spawnType,
+        typeKey: tk, 
+        def: ENEMY_DEFS[tk], 
+        hp: 1, 
+        isBoss: false, 
+        shootTimer: 0 
+    });
 }
 
 function spawnBoss(tier) {
     const wks = Object.keys(ENEMY_DEFS);
     let bw = []; for(let i=0; i<tier; i++) bw.push(wks[Math.floor(Math.random()*wks.length)]);
     let maxHP = 200 * tier;
-    enemies.push({ x: canvas.width/2, y: -200, hp: maxHP, maxHP: maxHP, isBoss: true, weapons: bw, def: {speed: 1.3}, shootTimer: 0 });
+    enemies.push({ x: canvas.width/2, y: -200, vx: 0, hp: maxHP, maxHP: maxHP, isBoss: true, weapons: bw, def: {speed: 1.3}, shootTimer: 0 });
     document.getElementById('bossBarContainer').style.display = 'block';
 }
 
