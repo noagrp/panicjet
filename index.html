@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Panic Jet</title>
+    <title>Benny's Panic Jet: Elite</title>
     <style>
         body { margin: 0; background: #000; overflow: hidden; color: #0f0; font-family: 'Courier New', monospace; touch-action: none; }
         canvas { display: block; background: #010401; }
@@ -12,302 +12,208 @@
             background: rgba(0, 30, 0, 0.95); 
             padding: 12px; 
             border-top: 3px solid #0f0; 
-            box-shadow: 0 -5px 20px rgba(0, 255, 0, 0.4);
             display: flex;
             justify-content: space-around;
             align-items: center;
-            font-size: 0.8em; /* Slightly smaller for mobile footer */
+            font-size: 0.8em;
             text-transform: uppercase;
             flex-wrap: wrap;
         }
         .weapon-tag { color: #fff; background: #222; padding: 2px 6px; border-radius: 4px; margin: 0 3px; border: 1px solid #0f0; font-size: 0.65em; display: inline-block; }
         #msg { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 2.5em; display: none; color: #fff; text-shadow: 0 0 20px #f00; z-index: 30; }
-        #bossBarContainer { position: absolute; top: 30px; left: 50%; transform: translateX(-50%); width: 80%; height: 10px; background: #200; border: 2px solid #f00; display: none; border-radius: 5px; overflow: hidden; }
-        #bossBar { width: 100%; height: 100%; background: linear-gradient(90deg, #f00, #ffaa00); transition: width 0.1s; }
+        #bootLog { position: absolute; top: 10px; left: 10px; font-size: 0.7em; color: #444; pointer-events: none; }
     </style>
 </head>
 <body>
-    <div id="bossBarContainer"><div id="bossBar"></div></div>
+    <div id="bootLog">SYSTEM: ARMED | AUDIO: DELAYED (5s)</div>
     <div id="msg">MAYDAY!</div>
     <canvas id="gameCanvas"></canvas>
     
     <div id="ui">
         <div class="stat-box">
-            <span>LIVES:<span id="lives">9</span> ULTS:<span id="ults">3</span></span>
-            <span>SHIELDS:<span id="shields">0</span>/3 KILLS:<span id="kills">0</span></span>
-            <span>GUN:x<span id="gunLv">2</span></span>
+            <span>LIVES:<span id="lives">9</span> SHIELDS:<span id="shields">0</span>/3</span>
+            <span>KILLS:<span id="kills">0</span> GUN:x<span id="gunLv">2</span></span>
             <div id="weaponSlots" style="width:100%; text-align:center; margin-top:5px;">WEAPONS: NONE</div>
         </div>
     </div>
 
 <script>
+// --- MASTER AUDIO LOGIC ---
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+let audioAllowed = false;
+
+// 5-Second Delay Gate
+setTimeout(() => { 
+    audioAllowed = true; 
+    document.getElementById('bootLog').innerText = "SYSTEM: ARMED | AUDIO: ONLINE";
+    document.getElementById('bootLog').style.color = "#0f0";
+}, 5000);
+
+function playSfx(type) {
+    if (!audioAllowed) return; // Projectiles will keep working even if this returns
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    const now = audioCtx.currentTime;
+
+    if (type === 'laser') {
+        osc.type = 'square'; osc.frequency.setValueAtTime(800, now);
+        osc.frequency.exponentialRampToValueAtTime(100, now + 0.1);
+        gain.gain.setValueAtTime(0.06, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+        osc.start(); osc.stop(now + 0.1);
+    } else if (type === 'boom') {
+        osc.type = 'sawtooth'; osc.frequency.setValueAtTime(120, now);
+        osc.frequency.linearRampToValueAtTime(40, now + 0.2);
+        gain.gain.setValueAtTime(0.15, now); gain.gain.linearRampToValueAtTime(0, now + 0.2);
+        osc.start(); osc.stop(now + 0.2);
+    }
+}
+
+// --- GAME CORE ---
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
-
-// --- NEW SCALING LOGIC ---
 let gameScale = 1;
-let hitScale = 1;
 
 function resize() {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
-    
-    // If Vertical (Mobile), shrink everything to 60% size
-    if (canvas.height > canvas.width) {
-        gameScale = 0.6;
-        hitScale = 0.65;
-    } else {
-        gameScale = 1.0;
-        hitScale = 1.0;
-    }
+    gameScale = (canvas.height > canvas.width) ? 0.6 : 1.0;
 }
 window.addEventListener('resize', resize);
 resize();
 
 const ENEMY_DEFS = {
-    'peon':   { color: '#ffffff', weapon: 'straight', speed: 2.2, label: 'Standard', shape: 'scout' },
-    'bomber': { color: '#ff00ff', weapon: 'lightning',speed: 1.5, label: 'Heavy',    shape: 'titan' },
-    'sgt':    { color: '#00ffff', weapon: 'missile',  speed: 3.2, label: 'Interceptor', shape: 'viper' },
-    'wiz':    { color: '#ffff00', weapon: 'energy',   speed: 2.0, label: 'Dual-Core', shape: 'twin_boom' },
-    'hunt':   { color: '#ff8800', weapon: 'rocket',   speed: 2.6, label: 'Predator',  shape: 'phantom' }
+    'peon':   { color: '#ffffff', speed: 2.0, shape: 'scout' },
+    'bomber': { color: '#ff00ff', speed: 1.5, shape: 'titan' },
+    'sgt':    { color: '#00ffff', speed: 3.0, shape: 'viper' },
+    'wiz':    { color: '#ffff00', speed: 2.0, shape: 'twin_boom' },
+    'hunt':   { color: '#ff8800', speed: 2.5, shape: 'phantom' }
 };
 
-let game = { score: 0, lives: 9, ults: 3, level: 1, ultActive: false, frame: 0 };
-let player = { x: canvas.width/2, y: canvas.height-180, active: true, mainGunProj: 2, shields: 0, stolenWeapons: [], shootTimer: 0 };
-let enemies = [], pBullets = [], eBullets = [], powerUps = [], stars = [];
+let game = { score: 0, lives: 9, frame: 0 };
+let player = { x: canvas.width/2, y: canvas.height-180, active: true, mainGunProj: 2, shields: 0, shootTimer: 0 };
+let enemies = [], pBullets = [], stars = [];
 
-for(let i=0; i<80; i++) stars.push({x: Math.random()*canvas.width, y: Math.random()*canvas.height, s: Math.random()*2+1});
+for(let i=0; i<60; i++) stars.push({x: Math.random()*canvas.width, y: Math.random()*canvas.height, s: Math.random()*2+1});
 
-function drawFleet(x, y, color, scale, isEnemy, shape, isBoss = false) {
+function drawFleet(x, y, color, scale, isEnemy, shape) {
     ctx.save();
     ctx.translate(x, y);
     if (isEnemy) ctx.rotate(Math.PI);
-    
-    // Apply dynamic gameScale
-    let finalScale = (isBoss ? scale * 2.8 : scale) * gameScale;
+    let finalScale = scale * gameScale;
     ctx.scale(finalScale, finalScale);
-
-    const dark = "#111";
-    const hull = isBoss ? "#8B0000" : "#333";
-
+    const hull = isEnemy ? "#333" : "#444";
     const drawPart = (path, fill) => {
-        ctx.fillStyle = fill;
-        ctx.beginPath(); path(); ctx.closePath(); ctx.fill();
-        ctx.strokeStyle = "rgba(255,255,255,0.3)"; ctx.lineWidth = 1; ctx.stroke();
+        ctx.fillStyle = fill; ctx.beginPath(); path(); ctx.closePath(); ctx.fill();
+        ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.stroke();
     };
-
-    if (shape === 'player' || isBoss) {
+    if (shape === 'player') {
         drawPart(() => { ctx.moveTo(-50, 15); ctx.lineTo(0, -15); ctx.lineTo(50, 15); ctx.lineTo(15, 35); ctx.lineTo(-15, 35); }, color);
         drawPart(() => { ctx.moveTo(0, -50); ctx.lineTo(-12, 25); ctx.lineTo(12, 25); }, hull);
-    } else if (shape === 'scout') {
-        drawPart(() => { ctx.moveTo(-30, 10); ctx.lineTo(0, -5); ctx.lineTo(30, 10); ctx.lineTo(0, 15); }, color);
-        drawPart(() => { ctx.moveTo(0, -25); ctx.lineTo(-8, 15); ctx.lineTo(8, 15); }, hull);
-    } else if (shape === 'titan') {
-        drawPart(() => { ctx.moveTo(-65, 25); ctx.lineTo(0, -30); ctx.lineTo(65, 25); ctx.lineTo(0, 45); }, color);
-        drawPart(() => { ctx.moveTo(0, -40); ctx.lineTo(-20, 30); ctx.lineTo(20, 30); }, hull);
-        drawPart(() => { ctx.fillRect(-45, 10, 15, 20); ctx.fillRect(30, 10, 15, 20); }, dark);
-    } else if (shape === 'viper') {
-        drawPart(() => { ctx.moveTo(-45, 20); ctx.lineTo(0, 0); ctx.lineTo(45, 20); ctx.lineTo(10, 30); ctx.lineTo(-10, 30); }, color);
-        drawPart(() => { ctx.moveTo(0, -55); ctx.lineTo(-6, 20); ctx.lineTo(6, 20); }, hull);
-    } else if (shape === 'twin_boom') {
-        drawPart(() => { ctx.moveTo(-50, 5); ctx.lineTo(0, 0); ctx.lineTo(50, 5); ctx.lineTo(0, 15); }, color);
-        drawPart(() => { ctx.fillRect(-25, -20, 12, 50); ctx.fillRect(13, -20, 12, 50); }, hull);
-    } else if (shape === 'phantom') {
-        drawPart(() => { ctx.moveTo(0, -40); ctx.lineTo(-55, 0); ctx.lineTo(0, 40); ctx.lineTo(55, 0); }, color);
-        drawPart(() => { ctx.moveTo(0, -25); ctx.lineTo(-10, 10); ctx.lineTo(10, 10); }, dark);
+    } else {
+        drawPart(() => { ctx.moveTo(-35, 10); ctx.lineTo(0, -25); ctx.lineTo(35, 10); ctx.lineTo(0, 20); }, color);
+        drawPart(() => { ctx.moveTo(0, -15); ctx.lineTo(-8, 10); ctx.lineTo(8, 10); }, hull);
     }
-
     ctx.fillStyle = "rgba(0, 255, 255, 0.9)";
-    ctx.beginPath(); ctx.ellipse(0, -15, 5, 12, 0, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(0, -10, 4, 10, 0, 0, 7); ctx.fill();
     ctx.restore();
 }
 
-function triggerUltimate() {
-    if (game.ults <= 0 || game.ultActive) return false;
-    game.ults--; game.ultActive = true; updateUI();
-    eBullets = [];
-    enemies = enemies.filter(en => en.isBoss);
-    setTimeout(() => { game.ultActive = false; }, 1000);
-    return true;
+function spawnSquad() {
+    const keys = Object.keys(ENEMY_DEFS);
+    const tk = keys[Math.floor(Math.random() * keys.length)];
+    const area = Math.floor(Math.random() * 4); // QUADRANT SPAWN
+    let startX, startY;
+    if (area === 0) { startX = canvas.width * 0.2; startY = -100; }
+    else if (area === 1) { startX = canvas.width * 0.8; startY = -100; }
+    else if (area === 2) { startX = -100; startY = canvas.height * 0.2; }
+    else { startX = canvas.width + 100; startY = canvas.height * 0.2; }
+
+    for(let i=0; i<3; i++) {
+        enemies.push({ x: startX + (i*40), y: startY - (i*50), typeKey: tk, def: ENEMY_DEFS[tk], offset: Math.random()*100, area: area });
+    }
 }
 
 function update() {
     game.frame++;
-    ctx.fillStyle = game.ultActive ? "#0a2a0a" : "#010401";
+    ctx.fillStyle = "#010401";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-
     stars.forEach(s => {
-        s.y += s.s;
-        if(s.y > canvas.height) { s.y = 0; s.x = Math.random()*canvas.width; }
-        ctx.fillStyle = "white"; ctx.fillRect(s.x, s.y, s.s/2, s.s/2);
+        s.y += s.s; if(s.y > canvas.height) s.y = 0;
+        ctx.fillStyle = "white"; ctx.fillRect(s.x, s.y, 1, 1);
     });
 
     if (player.active) {
         if (player.shields > 0) {
-            const r = (75 + Math.sin(game.frame * 0.1) * 3) * gameScale;
-            const shieldGrad = ctx.createRadialGradient(player.x-10, player.y-10, 5, player.x, player.y, r);
-            shieldGrad.addColorStop(0, "rgba(200, 200, 200, 0.4)");
-            shieldGrad.addColorStop(1, "rgba(0, 255, 0, 0.6)");
-            ctx.save(); ctx.fillStyle = shieldGrad;
-            ctx.beginPath(); ctx.arc(player.x, player.y, r, 0, 7); ctx.fill();
-            ctx.strokeStyle = "rgba(0, 255, 0, 0.8)"; ctx.stroke(); ctx.restore();
+            ctx.strokeStyle = "#0f0"; ctx.beginPath();
+            ctx.arc(player.x, player.y, 60*gameScale, 0, 7); ctx.stroke();
         }
         drawFleet(player.x, player.y, '#0f0', 1, false, 'player');
         player.shootTimer++;
         if (player.shootTimer > 8) {
+            playSfx('laser'); // Delayed trigger
             let spacing = 15 * gameScale;
             let start = player.x - (player.mainGunProj - 1) * spacing;
-            for(let i=0; i<player.mainGunProj; i++) pBullets.push({x: start+(i*spacing*2), y: player.y - (50 * gameScale), vx: 0, vy: -22, color: '#fff', size: 5 * gameScale});
-            player.stolenWeapons.forEach(w => fire(player.x, player.y, w, true));
+            for(let i=0; i<player.mainGunProj; i++) pBullets.push({x: start+(i*spacing*2), y: player.y - 40, vy: -18, color: '#fff'});
             player.shootTimer = 0;
         }
     }
 
     enemies.forEach((en, i) => {
-        if (en.isBoss) {
-            if (en.y < canvas.height * 0.18) en.y += (en.def.speed || 1.3) * gameScale;
-            en.x += (player.x - en.x) * 0.035;
-            document.getElementById('bossBar').style.width = (en.hp / en.maxHP * 100) + "%";
-        } else {
-            en.x += (player.x - en.x) * 0.02; 
-            en.y += (en.def.speed * (1 + (game.level-1)*0.4)) * (canvas.height > canvas.width ? 0.8 : 1);
+        if (en.area <= 1) { en.y += en.def.speed; en.x += Math.sin(en.y / 50 + en.offset) * 2; }
+        else if (en.area === 2) { en.x += en.def.speed; en.y += 1.2; }
+        else { en.x -= en.def.speed; en.y += 1.2; }
+
+        drawFleet(en.x, en.y, en.def.color, 1, true, en.def.shape);
+        if (player.active && Math.hypot(en.x - player.x, en.y - player.y) < 50 * gameScale) { 
+            if(player.shields > 0) { player.shields--; enemies.splice(i, 1); playSfx('boom'); updateUI(); }
+            else killPlayer();
         }
-        drawFleet(en.x, en.y, en.def.color, 1.1, true, en.def.shape, en.isBoss);
-        
-        en.shootTimer++;
-        if (en.shootTimer > (en.isBoss ? 30 : 75)) {
-            if (en.isBoss) en.weapons.forEach(w => fire(en.x, en.y, w, false));
-            else fire(en.x, en.y, en.typeKey, false);
-            en.shootTimer = 0;
-        }
-        
-        // Scaled Hitbox
-        let hitLimit = (en.isBoss ? 150 : 65) * hitScale;
-        if (player.active && Math.hypot(en.x - player.x, en.y - player.y) < hitLimit) { 
-            if(player.shields > 0) { player.shields--; enemies.splice(i, 1); updateUI(); }
-            else if (!triggerUltimate()) { killPlayer(); if(!en.isBoss) enemies.splice(i, 1); }
-        }
-        if (!en.isBoss && en.y > canvas.height + 200) enemies.splice(i, 1);
+        if (en.y > canvas.height + 200 || en.x < -200 || en.x > canvas.width + 200) enemies.splice(i, 1);
     });
 
-    [pBullets, eBullets].forEach((arr, isP) => {
-        for (let i = arr.length - 1; i >= 0; i--) {
-            let b = arr[i];
-            if (b.chase && player.active) { b.vx += (player.x - b.x) * 0.009; b.vx *= 0.95; }
-            b.x += b.vx; b.y += b.vy;
-            ctx.save(); ctx.shadowBlur = 15; ctx.shadowColor = b.color;
-            if (b.isLightning) {
-                ctx.fillStyle = b.color; ctx.beginPath(); ctx.arc(b.x, b.y, b.size, 0, 7); ctx.fill();
-                ctx.strokeStyle = "white"; ctx.lineWidth = 2; ctx.beginPath();
-                for(let j=0; j<8; j++) { ctx.moveTo(b.x, b.y); ctx.lineTo(b.x + (Math.random()-0.5)*70*gameScale, b.y + (Math.random()-0.5)*70*gameScale); }
-                ctx.stroke();
-            } else if (b.isRocket) {
-                ctx.translate(b.x, b.y); if (!isP) ctx.rotate(Math.PI); ctx.scale(gameScale, gameScale);
-                ctx.fillStyle = "#111"; ctx.beginPath(); ctx.moveTo(0, -18); ctx.lineTo(-6, 0); ctx.lineTo(6, 0); ctx.fill();
-                ctx.fillStyle = "#bdc3c7"; ctx.fillRect(-6, 0, 12, 20);
-            } else { ctx.fillStyle = b.color; ctx.fillRect(b.x-b.size/2, b.y, b.size, b.size*4); }
-            ctx.restore();
-
-            if (isP === 0) {
-                enemies.forEach((en, ei) => {
-                    let hitLimit = (en.isBoss ? 150 : 60) * hitScale;
-                    if (Math.hypot(b.x - en.x, b.y - en.y) < hitLimit) {
-                        en.hp--; arr.splice(i, 1);
-                        if (en.hp <= 0) {
-                            game.score++; 
-                            if(game.score % 20 === 0) {
-                                if(player.shields < 3) player.shields++;
-                                if(player.mainGunProj < 10) player.mainGunProj++;
-                                powerUps.push({x: en.x, y: en.y, type: en.typeKey, color: en.def.color});
-                            }
-                            if (en.isBoss) {
-                                document.getElementById('bossBarContainer').style.display = 'none';
-                                alert("LEVEL COMPLETE!"); location.reload();
-                            } else {
-                                if (game.score % 50 === 0) spawnBoss(Math.min(game.score/50+1, 4));
-                            }
-                            enemies.splice(ei, 1); updateUI();
-                        }
-                    }
-                });
-            } else {
-                if (player.active && Math.hypot(b.x - player.x, b.y - player.y) < 40 * hitScale) { 
-                    if(player.shields > 0) { player.shields--; arr.splice(i, 1); updateUI(); }
-                    else if (!triggerUltimate()) { killPlayer(); arr.splice(i, 1); }
-                }
+    for (let i = pBullets.length - 1; i >= 0; i--) {
+        let b = pBullets[i]; b.y += b.vy;
+        ctx.fillStyle = b.color; ctx.fillRect(b.x-2, b.y, 4, 15);
+        enemies.forEach((en, ei) => {
+            if (Math.hypot(b.x - en.x, b.y - en.y) < 40 * gameScale) {
+                game.score++; pBullets.splice(i, 1); playSfx('boom');
+                if(game.score % 20 === 0) { if(player.shields < 3) player.shields++; player.mainGunProj++; }
+                enemies.splice(ei, 1); updateUI();
             }
-            if (b.y < -250 || b.y > canvas.height + 250) arr.splice(i, 1);
-        }
-    });
-
-    powerUps.forEach((p, i) => {
-        p.y += 2.2; const r = 32 * gameScale;
-        const orbGrad = ctx.createRadialGradient(p.x-8, p.y-8, 2, p.x, p.y, r);
-        orbGrad.addColorStop(0, "white"); orbGrad.addColorStop(0.5, p.color); orbGrad.addColorStop(1, "black");
-        ctx.save(); ctx.shadowBlur = 30; ctx.shadowColor = p.color; ctx.fillStyle = orbGrad;
-        ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill();
-        ctx.globalAlpha = 0.6; drawFleet(p.x, p.y, "white", 0.35, false, ENEMY_DEFS[p.type].shape); ctx.restore();
-        if (player.active && Math.hypot(p.x-player.x, p.y-player.y) < 65 * hitScale) {
-            if (player.stolenWeapons.length >= 3) player.stolenWeapons.shift();
-            player.stolenWeapons.push(p.type); powerUps.splice(i, 1); updateUI();
-        }
-    });
+        });
+        if (b.y < -50) pBullets.splice(i, 1);
+    }
     requestAnimationFrame(update);
 }
 
-function fire(x, y, typeKey, isPlayer) {
-    const dir = isPlayer ? -1 : 1;
-    const color = isPlayer ? '#0f0' : ENEMY_DEFS[typeKey].color;
-    const arr = isPlayer ? pBullets : eBullets;
-    const startY = isPlayer ? y - (50 * gameScale) : y + (50 * gameScale);
-    if (typeKey === 'bomber') arr.push({x, y: startY, vx: 0, vy: 5*dir, color, size: 28 * gameScale, isLightning: true});
-    else if (typeKey === 'hunt') arr.push({x, y: startY, vx: 0, vy: 7.5*dir, color, size: 12 * gameScale, isRocket: true, chase: true});
-    else arr.push({x, y: startY, vx: 0, vy: (isPlayer ? 20 : 14)*dir, color, size: 6 * gameScale});
-}
-
-function moveInput(e) {
-    if (!player.active) return;
+// Input Handlers
+const handleInput = (e) => { 
+    if (audioCtx.state === 'suspended') audioCtx.resume();
     const rect = canvas.getBoundingClientRect();
     player.x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
     player.y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
-}
-window.addEventListener('mousemove', moveInput);
-window.addEventListener('touchmove', (e) => { e.preventDefault(); moveInput(e); }, { passive: false });
-
-function spawnEnemy() {
-    const keys = Object.keys(ENEMY_DEFS);
-    const tk = keys[Math.floor(Math.random() * keys.length)];
-    enemies.push({ x: Math.random()*(canvas.width-100)+50, y: -100, typeKey: tk, def: ENEMY_DEFS[tk], hp: 1, isBoss: false, shootTimer: 0 });
-}
-
-function spawnBoss(tier) {
-    const wks = Object.keys(ENEMY_DEFS);
-    let bw = []; for(let i=0; i<tier; i++) bw.push(wks[Math.floor(Math.random()*wks.length)]);
-    let maxHP = 200 * tier;
-    enemies.push({ x: canvas.width/2, y: -200, hp: maxHP, maxHP: maxHP, isBoss: true, weapons: bw, def: {speed: 1.3}, shootTimer: 0 });
-    document.getElementById('bossBarContainer').style.display = 'block';
-}
+};
+window.addEventListener('mousemove', handleInput);
+window.addEventListener('touchmove', (e) => { e.preventDefault(); handleInput(e); }, {passive:false});
 
 function killPlayer() {
-    if (!player.active) return;
-    player.active = false; game.lives--; player.shields = 0;
-    updateUI(); document.getElementById('msg').style.display = 'block';
-    if (game.lives <= 0) { alert("MISSION OVER."); location.reload(); }
-    else { setTimeout(() => { player.active = true; document.getElementById('msg').style.display = 'none'; }, 2000); }
+    player.active = false; game.lives--; playSfx('boom'); updateUI();
+    document.getElementById('msg').style.display = 'block';
+    setTimeout(() => { player.active = true; document.getElementById('msg').style.display = 'none'; }, 2000);
 }
 
 function updateUI() {
     document.getElementById('lives').innerText = game.lives;
-    document.getElementById('ults').innerText = game.ults;
     document.getElementById('shields').innerText = player.shields;
     document.getElementById('kills').innerText = game.score;
     document.getElementById('gunLv').innerText = player.mainGunProj;
-    const slots = document.getElementById('weaponSlots');
-    slots.innerHTML = "WEAPONS: " + (player.stolenWeapons.length ? player.stolenWeapons.map(w => `<span class="weapon-tag">${ENEMY_DEFS[w].label}</span>`).join("") : "NONE");
 }
 
-setInterval(() => { if (enemies.length < 10) spawnEnemy(); }, 800);
-updateUI(); update();
+setInterval(() => { if (enemies.length < 15) spawnSquad(); }, 1000);
+update();
 </script>
 </body>
 </html>
