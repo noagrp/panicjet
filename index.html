@@ -3,12 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Benny's Panic Jet: Cone Edition</title>
+    <title>Benny's Panic Jet: Final Master</title>
     <style>
         body { margin: 0; background: #000; overflow: hidden; color: #0f0; font-family: 'Courier New', monospace; touch-action: none; }
         canvas { display: block; background: #010401; }
         #ui { position: absolute; bottom: 0; left: 0; width: 100%; pointer-events: none; z-index: 20; }
         .stat-box { background: rgba(0, 30, 0, 0.95); padding: 12px; border-top: 3px solid #0f0; display: flex; justify-content: space-around; align-items: center; font-size: 0.8em; text-transform: uppercase; flex-wrap: wrap; }
+        .weapon-tag { color: #fff; background: #222; padding: 2px 6px; border-radius: 4px; margin: 0 3px; border: 1px solid #0f0; font-size: 0.65em; display: inline-block; }
         #msg { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 2.5em; display: none; color: #fff; text-shadow: 0 0 20px #f00; z-index: 30; }
         #bootLog { position: absolute; top: 10px; left: 10px; font-size: 0.7em; color: #444; pointer-events: none; }
     </style>
@@ -17,23 +18,22 @@
     <div id="bootLog">SYSTEM: ARMED | AUDIO: DELAYED (5s)</div>
     <div id="msg">MAYDAY!</div>
     <canvas id="gameCanvas"></canvas>
-    
     <div id="ui">
         <div class="stat-box">
-            <span>LIVES:<span id="lives">9</span> SHIELDS:<span id="shields">0</span>/3</span>
+            <span>LIVES:<span id="lives">9</span> ULTS:<span id="ults">3</span> SHIELDS:<span id="shields">0</span>/3</span>
             <span>KILLS:<span id="kills">0</span> GUN:x<span id="gunLv">2</span></span>
+            <div id="weaponSlots" style="width:100%; text-align:center; margin-top:5px;">WEAPONS: NONE</div>
         </div>
     </div>
 
 <script>
-// --- AUDIO CONFIG ---
+// --- AUDIO (5S DELAY) ---
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 let audioAllowed = false;
-setTimeout(() => { audioAllowed = true; document.getElementById('bootLog').innerText = "SYSTEM: ARMED | AUDIO: ONLINE"; document.getElementById('bootLog').style.color = "#0f0"; }, 5000);
+setTimeout(() => { audioAllowed = true; document.getElementById('bootLog').style.color = "#0f0"; }, 5000);
 
 function playSfx(type) {
-    if (!audioAllowed) return;
-    if (audioCtx.state === 'suspended') audioCtx.resume();
+    if (!audioAllowed || audioCtx.state === 'suspended') return;
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.connect(gain); gain.connect(audioCtx.destination);
@@ -48,31 +48,32 @@ function playSfx(type) {
         osc.frequency.linearRampToValueAtTime(40, now + 0.2);
         gain.gain.setValueAtTime(0.1, now); gain.gain.linearRampToValueAtTime(0, now + 0.2);
         osc.start(); osc.stop(now + 0.2);
+    } else if (type === 'ult') {
+        osc.type = 'sine'; osc.frequency.setValueAtTime(100, now);
+        osc.frequency.exponentialRampToValueAtTime(1200, now + 0.6);
+        gain.gain.setValueAtTime(0.2, now); gain.gain.linearRampToValueAtTime(0, now + 0.6);
+        osc.start(); osc.stop(now + 0.6);
     }
 }
 
-// --- GAME ENGINE ---
+// --- ENGINE ---
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 let gameScale = 1;
-
-function resize() {
-    canvas.width = window.innerWidth; canvas.height = window.innerHeight;
-    gameScale = (canvas.height > canvas.width) ? 0.6 : 1.0;
-}
+function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; gameScale = (canvas.height > canvas.width) ? 0.6 : 1.0; }
 window.addEventListener('resize', resize); resize();
 
 const ENEMY_DEFS = {
-    'peon':   { color: '#ffffff', speed: 2.0, shape: 'scout' },
-    'bomber': { color: '#ff00ff', speed: 1.5, shape: 'titan' },
-    'sgt':    { color: '#00ffff', speed: 3.0, shape: 'viper' },
-    'wiz':    { color: '#ffff00', speed: 2.0, shape: 'twin_boom' },
-    'hunt':   { color: '#ff8800', speed: 2.5, shape: 'phantom' }
+    'peon':   { color: '#ffffff', speed: 2.0, shape: 'scout', weapon: 'std', label: 'Standard' },
+    'bomber': { color: '#ff00ff', speed: 1.5, shape: 'titan', weapon: 'bolt', label: 'Heavy' },
+    'sgt':    { color: '#00ffff', speed: 3.2, shape: 'viper', weapon: 'std', label: 'Interceptor' },
+    'wiz':    { color: '#ffff00', speed: 2.2, shape: 'twin_boom', weapon: 'std', label: 'Dual-Core' },
+    'hunt':   { color: '#ff8800', speed: 2.6, shape: 'phantom', weapon: 'rocket', label: 'Predator' }
 };
 
-let game = { score: 0, lives: 9, frame: 0 };
-let player = { x: canvas.width/2, y: canvas.height-180, active: true, mainGunProj: 2, shields: 0, shootTimer: 0 };
-let enemies = [], pBullets = [], eBullets = [], stars = [];
+let game = { score: 0, lives: 9, ults: 3, ultActive: false };
+let player = { x: canvas.width/2, y: canvas.height-180, active: true, mainGunProj: 2, shields: 0, stolenWeapons: [], shootTimer: 0 };
+let enemies = [], pBullets = [], eBullets = [], powerUps = [], stars = [];
 
 for(let i=0; i<60; i++) stars.push({x: Math.random()*canvas.width, y: Math.random()*canvas.height, s: Math.random()*2+1});
 
@@ -95,48 +96,46 @@ function drawFleet(x, y, color, scale, isEnemy, shape) {
     ctx.restore();
 }
 
+function triggerUltimate() {
+    if (game.ults <= 0 || game.ultActive) return false;
+    game.ults--; game.ultActive = true; playSfx('ult');
+    enemies = []; eBullets = []; updateUI();
+    setTimeout(() => { game.ultActive = false; }, 1000);
+    return true;
+}
+
 function spawnSquad() {
     const keys = Object.keys(ENEMY_DEFS);
     const tk = keys[Math.floor(Math.random() * keys.length)];
     const area = Math.floor(Math.random() * 4);
-    let startX, startY;
-    if (area === 0) { startX = canvas.width * 0.2; startY = -100; }
-    else if (area === 1) { startX = canvas.width * 0.8; startY = -100; }
-    else if (area === 2) { startX = -100; startY = canvas.height * 0.2; }
-    else { startX = canvas.width + 100; startY = canvas.height * 0.2; }
-    for(let i=0; i<3; i++) {
-        enemies.push({ x: startX + (i*40), y: startY - (i*50), typeKey: tk, def: ENEMY_DEFS[tk], offset: Math.random()*100, area: area, shootTimer: Math.random()*50 });
-    }
+    let sx, sy;
+    if (area === 0) { sx = canvas.width * 0.2; sy = -100; }
+    else if (area === 1) { sx = canvas.width * 0.8; sy = -100; }
+    else if (area === 2) { sx = -100; sy = canvas.height * 0.2; }
+    else { sx = canvas.width + 100; sy = canvas.height * 0.2; }
+    for(let i=0; i<3; i++) enemies.push({ x: sx + (i*40), y: sy - (i*50), typeKey: tk, def: ENEMY_DEFS[tk], offset: Math.random()*100, area: area, shootTimer: Math.random()*80 });
 }
 
 function update() {
-    game.frame++;
-    ctx.fillStyle = "#010401"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = game.ultActive ? "#0a2a0a" : "#010401"; ctx.fillRect(0, 0, canvas.width, canvas.height);
     stars.forEach(s => { s.y += s.s; if(s.y > canvas.height) s.y = 0; ctx.fillStyle = "white"; ctx.fillRect(s.x, s.y, 1, 1); });
 
     if (player.active) {
         if (player.shields > 0) { ctx.strokeStyle = "#0f0"; ctx.beginPath(); ctx.arc(player.x, player.y, 60*gameScale, 0, 7); ctx.stroke(); }
         drawFleet(player.x, player.y, '#0f0', 1, false, 'player');
         player.shootTimer++;
-        
         if (player.shootTimer > 8) {
             playSfx('laser');
-            // --- CONE SHOOTING LOGIC ---
             const count = player.mainGunProj;
-            const spreadAngle = 0.4; // Total width of the cone
-            const startAngle = -spreadAngle / 2;
-            const step = spreadAngle / (count - 1);
-            
+            const spread = 0.4; const step = spread / (count - 1);
             for(let i=0; i<count; i++) {
-                let angle = startAngle + (step * i);
-                pBullets.push({
-                    x: player.x, 
-                    y: player.y - 40, 
-                    vx: Math.sin(angle) * 18, 
-                    vy: -Math.cos(angle) * 18, 
-                    color: '#fff'
-                });
+                let ang = -spread/2 + (step * i);
+                pBullets.push({ x: player.x, y: player.y - 40, vx: Math.sin(ang)*18, vy: -Math.cos(ang)*18, color: '#fff', type: 'std' });
             }
+            // Fire Stolen Weapons
+            player.stolenWeapons.forEach(w => {
+                pBullets.push({ x: player.x, y: player.y - 40, vx: 0, vy: -15, color: ENEMY_DEFS[w].color, type: ENEMY_DEFS[w].weapon });
+            });
             player.shootTimer = 0;
         }
     }
@@ -148,39 +147,52 @@ function update() {
         drawFleet(en.x, en.y, en.def.color, 1, true, en.def.shape);
         
         en.shootTimer++;
-        if (en.shootTimer > 100) {
-            eBullets.push({ x: en.x, y: en.y + 20, vx: 0, vy: 5, color: en.def.color });
+        if (en.shootTimer > 110) {
+            eBullets.push({ x: en.x, y: en.y, vx: 0, vy: 6, color: en.def.color, type: en.def.weapon });
             en.shootTimer = 0;
         }
-
         if (player.active && Math.hypot(en.x - player.x, en.y - player.y) < 50 * gameScale) { 
             if(player.shields > 0) { player.shields--; enemies.splice(i, 1); playSfx('boom'); updateUI(); }
-            else killPlayer();
+            else if (!triggerUltimate()) killPlayer();
         }
         if (en.y > canvas.height + 200 || en.x < -200 || en.x > canvas.width + 200) enemies.splice(i, 1);
     });
 
+    powerUps.forEach((p, i) => {
+        p.y += 2.5; 
+        ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, 20*gameScale, 0, 7); ctx.fill();
+        ctx.strokeStyle = "white"; ctx.stroke();
+        if (player.active && Math.hypot(p.x - player.x, p.y - player.y) < 60*gameScale) {
+            if (player.stolenWeapons.length >= 3) player.stolenWeapons.shift();
+            player.stolenWeapons.push(p.type); powerUps.splice(i, 1); updateUI();
+        }
+    });
+
     [pBullets, eBullets].forEach((arr, isP) => {
         for (let i = arr.length - 1; i >= 0; i--) {
-            let b = arr[i]; b.x += b.vx; b.y += b.vy;
-            ctx.fillStyle = b.color; ctx.fillRect(b.x-2, b.y, 4, 12);
-            if (!isP) { // Player bullets
+            let b = arr[i]; b.x += b.vx || 0; b.y += (isP ? b.vy : -b.vy);
+            ctx.shadowBlur = 10; ctx.shadowColor = b.color; ctx.fillStyle = b.color;
+            if (b.type === 'bolt') { ctx.fillRect(b.x-4, b.y, 8, 20); }
+            else if (b.type === 'rocket') { ctx.beginPath(); ctx.arc(b.x, b.y, 6, 0, 7); ctx.fill(); }
+            else { ctx.fillRect(b.x-2, b.y, 4, 12); }
+            ctx.shadowBlur = 0;
+
+            if (!isP) { // Player Bullets
                 enemies.forEach((en, ei) => {
                     if (Math.hypot(b.x - en.x, b.y - en.y) < 40 * gameScale) {
                         game.score++; arr.splice(i, 1); playSfx('boom');
-                        // UPGRADE TRIGGER: Limit gun to 6 projectiles
                         if(game.score % 20 === 0) { 
                             if(player.shields < 3) player.shields++; 
                             if(player.mainGunProj < 6) player.mainGunProj++; 
+                            powerUps.push({x: en.x, y: en.y, type: en.typeKey, color: en.def.color});
                         }
                         enemies.splice(ei, 1); updateUI();
                     }
                 });
-            } else { // Enemy bullets
-                if (player.active && Math.hypot(b.x - player.x, b.y - player.y) < 30 * gameScale) {
-                    if(player.shields > 0) { player.shields--; arr.splice(i, 1); playSfx('boom'); updateUI(); }
-                    else killPlayer();
-                }
+            } else if (player.active && Math.hypot(b.x - player.x, b.y - player.y) < 30 * gameScale) {
+                if(player.shields > 0) { player.shields--; arr.splice(i, 1); playSfx('boom'); updateUI(); }
+                else if (!triggerUltimate()) { killPlayer(); arr.splice(i, 1); }
+                else arr.splice(i, 1);
             }
             if (b.y < -100 || b.y > canvas.height + 100 || b.x < -100 || b.x > canvas.width + 100) arr.splice(i, 1);
         }
@@ -188,30 +200,12 @@ function update() {
     requestAnimationFrame(update);
 }
 
-const handleInput = (e) => { 
-    if (audioCtx.state === 'suspended') audioCtx.resume();
-    const rect = canvas.getBoundingClientRect();
-    player.x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
-    player.y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
-};
-window.addEventListener('mousemove', handleInput);
-window.addEventListener('touchmove', (e) => { e.preventDefault(); handleInput(e); }, {passive:false});
-
-function killPlayer() {
-    player.active = false; game.lives--; playSfx('boom'); updateUI();
-    document.getElementById('msg').style.display = 'block';
-    setTimeout(() => { player.active = true; document.getElementById('msg').style.display = 'none'; }, 2000);
-}
-
-function updateUI() {
-    document.getElementById('lives').innerText = game.lives;
-    document.getElementById('shields').innerText = player.shields;
-    document.getElementById('kills').innerText = game.score;
-    document.getElementById('gunLv').innerText = player.mainGunProj;
-}
-
+const h = (e) => { if(audioCtx.state==='suspended') audioCtx.resume(); const r=canvas.getBoundingClientRect(); player.x=(e.touches?e.touches[0].clientX:e.clientX)-r.left; player.y=(e.touches?e.touches[0].clientY:e.clientY)-r.top; };
+window.addEventListener('mousemove', h); window.addEventListener('touchmove', (e)=>{e.preventDefault(); h(e);}, {passive:false});
+function killPlayer() { player.active = false; game.lives--; playSfx('boom'); updateUI(); document.getElementById('msg').style.display = 'block'; setTimeout(() => { player.active = true; document.getElementById('msg').style.display = 'none'; }, 2000); if(game.lives<=0)location.reload(); }
+function updateUI() { document.getElementById('lives').innerText = game.lives; document.getElementById('ults').innerText = game.ults; document.getElementById('shields').innerText = player.shields; document.getElementById('kills').innerText = game.score; document.getElementById('gunLv').innerText = player.mainGunProj; document.getElementById('weaponSlots').innerHTML = "WEAPONS: " + (player.stolenWeapons.map(w => `<span class="weapon-tag">${ENEMY_DEFS[w].label}</span>`).join("")); }
 setInterval(() => { if (enemies.length < 15) spawnSquad(); }, 1200);
-update();
+updateUI(); update();
 </script>
 </body>
 </html>
