@@ -113,7 +113,7 @@ window.addEventListener('resize', resize);
 resize();
 
 const ENEMY_DEFS = {
-    'peon':   { color: '#ffffff', weapon: 'straight', speed: 2.2, label: 'Standard', shape: 'scout' },
+    'peon':    { color: '#ffffff', weapon: 'straight', speed: 2.2, label: 'Standard', shape: 'scout' },
     'bomber': { color: '#ff00ff', weapon: 'lightning',speed: 1.5, label: 'Heavy',    shape: 'titan' },
     'sgt':    { color: '#00ffff', weapon: 'missile',  speed: 3.2, label: 'Interceptor', shape: 'viper' },
     'wiz':    { color: '#ffff00', weapon: 'energy',   speed: 2.0, label: 'Dual-Core', shape: 'twin_boom' },
@@ -268,7 +268,10 @@ function update() {
                             }
                             if (en.isBoss) {
                                 document.getElementById('bossBarContainer').style.display = 'none';
-                                alert("LEVEL COMPLETE!"); location.reload();
+                                game.level++; 
+                                document.getElementById('msg').innerText = "LEVEL " + game.level + " START!";
+                                document.getElementById('msg').style.display = 'block';
+                                setTimeout(() => { document.getElementById('msg').style.display = 'none'; document.getElementById('msg').innerText = "MAYDAY!"; }, 2000);
                             } else {
                                 if (game.score % 50 === 0) spawnBoss(Math.min(game.score/50+1, 4));
                             }
